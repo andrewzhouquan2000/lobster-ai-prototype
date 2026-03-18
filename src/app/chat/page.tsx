@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, Suspense } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Card, CardContent } from '@/components/ui/card';
 import BottomNav from '@/components/BottomNav';
 
@@ -249,22 +250,25 @@ function ChatContent() {
         <div className="flex-1">
           <h1 className="font-semibold text-[#1A1A2E] text-sm">{projectName}</h1>
           <p className="text-xs text-gray-400">
-            {agentProgress.length > 0 ? `${agentProgress.length} 个 Agent 工作中` : '多 Agent 协作中'}
+            {loading ? '思考中...' : agentProgress.length > 0 ? `${agentProgress.length} 个 Agent 工作中` : '多 Agent 协作中'}
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-sm">📦</button>
+          <Link href={`/artifacts?project=${projectId}`} className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-sm hover:bg-orange-50 transition-colors" title="查看产出文件">
+            📦
+          </Link>
           <button className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-sm">⋯</button>
         </div>
       </div>
 
-      {/* Agent 进度指示器 - 更醒目的设计 */}
+      {/* Agent 进度指示器 - 增强版，显示实时状态 */}
       {agentProgress.length > 0 && (
         <div className="bg-gradient-to-r from-[#FF6B3D]/10 to-[#FF8F6B]/10 border-b border-[#FF6B3D]/20 px-4 py-3 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-[#FF6B3D] animate-pulse" />
               <span className="text-xs font-semibold text-[#FF6B3D]">AI 团队工作中</span>
+              <span className="text-xs text-gray-400">({agentProgress.length} 个 Agent)</span>
             </div>
             <div className="flex-1 h-1 bg-white/50 rounded-full overflow-hidden">
               <div className="h-full bg-gradient-to-r from-[#FF6B3D] to-[#FF8F6B] rounded-full animate-pulse" style={{ width: '60%' }} />
