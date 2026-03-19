@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 
 // 不需要登录验证的路径
-const publicPaths = ['/login', '/api/auth/login', '/api/auth/logout'];
+const publicPaths = ['/login', '/api/auth/login', '/api/auth/logout', '/api/debug'];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
