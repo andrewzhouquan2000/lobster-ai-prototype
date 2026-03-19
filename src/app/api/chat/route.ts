@@ -11,46 +11,55 @@ import {
   updateAgentCallCount,
   updateAgentStatus
 } from '@/lib/db';
-import fs from 'fs';
-import path from 'path';
 
-// 项目文件存储路径
-const PROJECTS_DIR = path.join(process.cwd(), 'data', 'projects');
+// 内存中存储 artifacts（Vercel serverless 兼容）
+interface Artifact {
+  name: string;
+  content: string;
+  created_at: Date;
+}
 
-// 确保项目目录存在
-function ensureProjectDir(projectId: string) {
-  const projectDir = path.join(PROJECTS_DIR, projectId);
-  if (!fs.existsSync(projectDir)) {
-    fs.mkdirSync(projectDir, { recursive: true });
+declare global {
+  // eslint-disable-next-line no-var
+  var artifactsStore: Map<string, Map<string, Artifact>> | undefined;
+}
+
+function getArtifactsStore(): Map<string, Map<string, Artifact>> {
+  if (!globalThis.artifactsStore) {
+    globalThis.artifactsStore = new Map();
   }
-  return projectDir;
+  return globalThis.artifactsStore;
 }
 
 // 保存产出文件
 function saveArtifact(projectId: string, filename: string, content: string) {
-  const projectDir = ensureProjectDir(projectId);
-  const filePath = path.join(projectDir, filename);
-  fs.writeFileSync(filePath, content, 'utf-8');
-  return filePath;
+  const store = getArtifactsStore();
+  if (!store.has(projectId)) {
+    store.set(projectId, new Map());
+  }
+  store.get(projectId)!.set(filename, {
+    name: filename,
+    content,
+    created_at: new Date()
+  });
+  return filename;
 }
 
 // 获取项目产出文件列表
-function getProjectArtifacts(projectId: string) {
-  const projectDir = path.join(PROJECTS_DIR, projectId);
-  if (!fs.existsSync(projectDir)) {
-    return [];
-  }
-  const files = fs.readdirSync(projectDir);
-  return files.map(filename => {
-    const filePath = path.join(projectDir, filename);
-    const stats = fs.statSync(filePath);
-    return {
-      name: filename,
-      size: stats.size,
-      created_at: stats.birthtime,
-      modified_at: stats.mtime
-    };
-  });
+function getProjectArtifacts(projectId: string): Artifact[] {
+  const store = getArtifactsStore();
+  const projectArtifacts = store.get(projectId);
+  if (!projectArtifacts) return [];
+  return Array.from(projectArtifacts.values());
+}
+
+// 获取 artifact 内容
+function getArtifactContent(projectId: string, filename: string): string | null {
+  const store = getArtifactsStore();
+  const projectArtifacts = store.get(projectId);
+  if (!projectArtifacts) return null;
+  const artifact = projectArtifacts.get(filename);
+  return artifact?.content || null;
 }
 
 // 调用 LLM API
@@ -377,11 +386,6 @@ function generateCodeContent(agent: string, task: string, filename: string): str
 
 // 模拟 Agent 工作
 async function simulateAgentWork(threadId: string, tasks: Array<{agent: string, task: string}>, projectId: string, userId: string) {
-  const toClassName = (filename: string): string => {
-    const baseName = filename.replace(/\.[^.]+$/, '');
-    return baseName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
-  };
-  
   const generateCompleteHTML = (task: string, projectName: string): string => {
     const title = task.replace(/开发|创建|制作|设计|实现/g, '').trim() || projectName || 'Web应用';
     const timestamp = new Date().toLocaleString('zh-CN');
@@ -470,8 +474,7 @@ async function simulateAgentWork(threadId: string, tasks: Array<{agent: string, 
     if (!indexExists) {
       const firstHtml = artifacts.find(a => a.name.toLowerCase().endsWith('.html'));
       if (firstHtml) {
-        const htmlContent = fs.readFileSync(path.join(PROJECTS_DIR, projectId, firstHtml.name), 'utf-8');
-        saveArtifact(projectId, 'index.html', htmlContent);
+        saveArtifact(projectId, 'index.html', firstHtml.content);
       }
     }
   }
