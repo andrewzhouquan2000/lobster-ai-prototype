@@ -1,83 +1,55 @@
 /**
- * Supabase 数据库抽象层 + 本地存储 fallback
- * 替代 better-sqlite3，兼容 Vercel Serverless
+ * Supabase 数据库抽象层 + 内存/本地存储 fallback
+ * 支持 Vercel Serverless 环境
  */
 
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import fs from 'fs';
-import path from 'path';
 
-// 本地存储文件路径
-const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'local-db.json');
+// 检测是否在 Vercel 环境
+const isVercel = process.env.VERCEL === '1';
 
-// 本地存储数据结构
-interface LocalDB {
-  profiles: Record<string, any>;
-  projects: Record<string, any>;
-  threads: Record<string, any>;
-  messages: Record<string, any[]>;
-  agents: Record<string, any>;
-  api_keys: Record<string, any>;
+// 内存存储（用于 Vercel 环境）
+interface InMemoryDB {
+  profiles: Map<string, any>;
+  projects: Map<string, any>;
+  threads: Map<string, any>;
+  messages: Map<string, any[]>;
+  agents: Map<string, any>;
+  api_keys: Map<string, any>;
 }
 
-// 初始化本地存储
-function loadLocalDB(): LocalDB {
-  try {
-    if (fs.existsSync(LOCAL_DB_PATH)) {
-      const data = fs.readFileSync(LOCAL_DB_PATH, 'utf-8');
-      return JSON.parse(data);
-    }
-  } catch (e) {
-    console.error('Failed to load local DB:', e);
+// 全局内存存储（Vercel 环境下会在同一实例内共享）
+declare global {
+  // eslint-disable-next-line no-var
+  var inMemoryDB: InMemoryDB | undefined;
+}
+
+function getInMemoryDB(): InMemoryDB {
+  if (!globalThis.inMemoryDB) {
+    globalThis.inMemoryDB = {
+      profiles: new Map(),
+      projects: new Map(),
+      threads: new Map(),
+      messages: new Map(),
+      agents: new Map([
+        ['coder', { id: 'coder', name: 'Coder', avatar: '💻', category: '开发', skills: ['Python', 'TypeScript', 'React'], description: '代码开发和系统架构专家', is_active: true, call_count: 0, status: 'available' }],
+        ['researcher', { id: 'researcher', name: 'Researcher', avatar: '🔍', category: '研究', skills: ['数据分析', '市场研究'], description: '深度研究和分析专家', is_active: true, call_count: 0, status: 'available' }],
+        ['designer', { id: 'designer', name: 'Designer', avatar: '🎨', category: '设计', skills: ['UI/UX', 'Figma'], description: '产品设计和用户体验专家', is_active: true, call_count: 0, status: 'available' }],
+        ['devops', { id: 'devops', name: 'DevOps', avatar: '⚙️', category: '运维', skills: ['Docker', 'K8s', 'CI/CD'], description: '部署和运维自动化专家', is_active: true, call_count: 0, status: 'available' }],
+        ['analyst', { id: 'analyst', name: 'Analyst', avatar: '📊', category: '分析', skills: ['财务分析', '数据可视化'], description: '数据分析和商业智能专家', is_active: true, call_count: 0, status: 'available' }]
+      ]),
+      api_keys: new Map()
+    };
   }
-  
-  // 返回默认数据
-  return {
-    profiles: {},
-    projects: {},
-    threads: {},
-    messages: {},
-    agents: {
-      'coder': { id: 'coder', name: 'Coder', avatar: '💻', category: '开发', skills: ['Python', 'TypeScript', 'React'], description: '代码开发和系统架构专家', is_active: true, call_count: 0, status: 'available' },
-      'researcher': { id: 'researcher', name: 'Researcher', avatar: '🔍', category: '研究', skills: ['数据分析', '市场研究'], description: '深度研究和分析专家', is_active: true, call_count: 0, status: 'available' },
-      'designer': { id: 'designer', name: 'Designer', avatar: '🎨', category: '设计', skills: ['UI/UX', 'Figma'], description: '产品设计和用户体验专家', is_active: true, call_count: 0, status: 'available' },
-      'devops': { id: 'devops', name: 'DevOps', avatar: '⚙️', category: '运维', skills: ['Docker', 'K8s', 'CI/CD'], description: '部署和运维自动化专家', is_active: true, call_count: 0, status: 'available' },
-      'analyst': { id: 'analyst', name: 'Analyst', avatar: '📊', category: '分析', skills: ['财务分析', '数据可视化'], description: '数据分析和商业智能专家', is_active: true, call_count: 0, status: 'available' }
-    },
-    api_keys: {}
-  };
+  return globalThis.inMemoryDB;
 }
 
-// 保存本地存储
-function saveLocalDB(db: LocalDB): void {
-  try {
-    const dir = path.dirname(LOCAL_DB_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(db, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Failed to save local DB:', e);
-  }
-}
-
-// 全局本地存储实例
-let localDB: LocalDB | null = null;
-
-function getLocalDB(): LocalDB {
-  if (!localDB) {
-    localDB = loadLocalDB();
-  }
-  return localDB;
-}
-
-// Supabase 客户端（服务端使用，绕过 RLS）
+// Supabase 客户端
 function getSupabaseClient(): SupabaseClient {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
-  // 在构建时提供占位符，避免构建失败
   const url = supabaseUrl || 'https://placeholder.supabase.co';
   const key = supabaseKey || 'placeholder-key';
   
@@ -89,18 +61,6 @@ function getSupabaseClient(): SupabaseClient {
   });
 }
 
-// 检查 Supabase 是否可用
-async function checkSupabaseAvailable(): Promise<boolean> {
-  try {
-    const client = getSupabaseClient();
-    const { error } = await client.from('profiles').select('id').limit(1);
-    return !error || error.code !== 'PGRST205';
-  } catch {
-    return false;
-  }
-}
-
-// 导出单例客户端
 export const supabase = getSupabaseClient();
 
 // ============ 类型定义 ============
@@ -187,8 +147,7 @@ export async function getOrCreateUser(userId?: string): Promise<User> {
   try {
     const client = getSupabaseClient();
     
-    // 先尝试通过 ID 查找
-    let { data: user, error } = await client
+    const { data: user, error } = await client
       .from('profiles')
       .select('*')
       .eq('id', targetUserId)
@@ -198,7 +157,6 @@ export async function getOrCreateUser(userId?: string): Promise<User> {
       return user;
     }
     
-    // 尝试通过 email 查找默认用户
     const { data: existingUser } = await client
       .from('profiles')
       .select('*')
@@ -209,7 +167,6 @@ export async function getOrCreateUser(userId?: string): Promise<User> {
       return existingUser;
     }
     
-    // 创建默认用户
     const { data: newUser, error: createError } = await client
       .from('profiles')
       .insert({
@@ -224,16 +181,15 @@ export async function getOrCreateUser(userId?: string): Promise<User> {
       return newUser;
     }
   } catch (e) {
-    console.log('Supabase not available, using local storage');
+    console.log('Supabase not available, using memory storage');
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (db.profiles[targetUserId]) {
-    return db.profiles[targetUserId];
+  // Fallback to memory storage
+  const db = getInMemoryDB();
+  if (db.profiles.has(targetUserId)) {
+    return db.profiles.get(targetUserId)!;
   }
   
-  // 创建本地用户
   const newUser: User = {
     id: targetUserId,
     email: 'demo@lobster.ai',
@@ -241,15 +197,12 @@ export async function getOrCreateUser(userId?: string): Promise<User> {
     created_at: new Date().toISOString()
   };
   
-  db.profiles[targetUserId] = newUser;
-  saveLocalDB(db);
-  
+  db.profiles.set(targetUserId, newUser);
   return newUser;
 }
 
 // Agent 操作
 export async function getAgents(): Promise<Agent[]> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -261,16 +214,14 @@ export async function getAgents(): Promise<Agent[]> {
       return data;
     }
   } catch (e) {
-    console.log('Using local agents');
+    console.log('Using memory agents');
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  return Object.values(db.agents).filter((a: any) => a.is_active);
+  const db = getInMemoryDB();
+  return Array.from(db.agents.values()).filter(a => a.is_active);
 }
 
 export async function updateAgentCallCount(agentId: string): Promise<void> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data } = await client
@@ -288,46 +239,41 @@ export async function updateAgentCallCount(agentId: string): Promise<void> {
     
     if (!error) return;
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (db.agents[agentId]) {
-    db.agents[agentId].call_count = (db.agents[agentId].call_count || 0) + 1;
-    saveLocalDB(db);
+  const db = getInMemoryDB();
+  const agent = db.agents.get(agentId);
+  if (agent) {
+    agent.call_count = (agent.call_count || 0) + 1;
+    db.agents.set(agentId, agent);
   }
 }
 
 export async function updateAgentStatus(agentId: string, status: string, currentUser?: string): Promise<void> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { error } = await client
       .from('agents')
-      .update({ 
-        status, 
-        current_user: currentUser || null 
-      })
+      .update({ status, current_user: currentUser || null })
       .eq('id', agentId);
     
     if (!error) return;
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (db.agents[agentId]) {
-    db.agents[agentId].status = status;
-    db.agents[agentId].current_user = currentUser;
-    saveLocalDB(db);
+  const db = getInMemoryDB();
+  const agent = db.agents.get(agentId);
+  if (agent) {
+    agent.status = status;
+    agent.current_user = currentUser;
+    db.agents.set(agentId, agent);
   }
 }
 
 // 项目操作
 export async function getProjects(userId: string): Promise<Project[]> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -340,16 +286,14 @@ export async function getProjects(userId: string): Promise<Project[]> {
       return data;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  return Object.values(db.projects).filter((p: any) => p.user_id === userId);
+  const db = getInMemoryDB();
+  return Array.from(db.projects.values()).filter(p => p.user_id === userId);
 }
 
 export async function getProject(projectId: string): Promise<Project | null> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -362,18 +306,16 @@ export async function getProject(projectId: string): Promise<Project | null> {
       return data;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  return db.projects[projectId] || null;
+  const db = getInMemoryDB();
+  return db.projects.get(projectId) || null;
 }
 
 export async function createProject(userId: string, name: string, description?: string): Promise<string> {
   const projectId = `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -393,13 +335,12 @@ export async function createProject(userId: string, name: string, description?: 
       return data.id;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
+  const db = getInMemoryDB();
   const now = new Date().toISOString();
-  db.projects[projectId] = {
+  db.projects.set(projectId, {
     id: projectId,
     user_id: userId,
     name,
@@ -408,14 +349,12 @@ export async function createProject(userId: string, name: string, description?: 
     progress: 0,
     created_at: now,
     updated_at: now
-  };
-  saveLocalDB(db);
+  });
   
   return projectId;
 }
 
 export async function updateProjectName(projectId: string, name: string): Promise<void> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { error } = await client
@@ -425,25 +364,23 @@ export async function updateProjectName(projectId: string, name: string): Promis
     
     if (!error) return;
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (db.projects[projectId]) {
-    db.projects[projectId].name = name;
-    db.projects[projectId].updated_at = new Date().toISOString();
-    saveLocalDB(db);
+  const db = getInMemoryDB();
+  const project = db.projects.get(projectId);
+  if (project) {
+    project.name = name;
+    project.updated_at = new Date().toISOString();
+    db.projects.set(projectId, project);
   }
 }
 
 // 线程操作
 export async function getOrCreateThread(projectId: string, userId: string): Promise<Thread> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     
-    // 查找现有线程
     const { data: existingThread } = await client
       .from('threads')
       .select('*')
@@ -454,7 +391,6 @@ export async function getOrCreateThread(projectId: string, userId: string): Prom
       return existingThread;
     }
     
-    // 创建新线程
     const threadId = `thread-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const { data: newThread, error } = await client
       .from('threads')
@@ -471,16 +407,15 @@ export async function getOrCreateThread(projectId: string, userId: string): Prom
       return newThread;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
+  const db = getInMemoryDB();
   
   // 查找现有线程
-  for (const thread of Object.values(db.threads)) {
-    if ((thread as any).project_id === projectId) {
-      return thread as Thread;
+  for (const thread of db.threads.values()) {
+    if (thread.project_id === projectId) {
+      return thread;
     }
   }
   
@@ -494,16 +429,14 @@ export async function getOrCreateThread(projectId: string, userId: string): Prom
     created_at: new Date().toISOString()
   };
   
-  db.threads[threadId] = newThread;
-  db.messages[threadId] = [];
-  saveLocalDB(db);
+  db.threads.set(threadId, newThread);
+  db.messages.set(threadId, []);
   
   return newThread;
 }
 
 // 消息操作
 export async function getMessages(threadId: string): Promise<Message[]> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -516,12 +449,11 @@ export async function getMessages(threadId: string): Promise<Message[]> {
       return data;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  return db.messages[threadId] || [];
+  const db = getInMemoryDB();
+  return db.messages.get(threadId) || [];
 }
 
 export async function createMessage(
@@ -533,7 +465,6 @@ export async function createMessage(
 ): Promise<string> {
   const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -553,13 +484,12 @@ export async function createMessage(
       return data.id;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (!db.messages[threadId]) {
-    db.messages[threadId] = [];
+  const db = getInMemoryDB();
+  if (!db.messages.has(threadId)) {
+    db.messages.set(threadId, []);
   }
   
   const message: Message = {
@@ -572,14 +502,12 @@ export async function createMessage(
     created_at: new Date().toISOString()
   };
   
-  db.messages[threadId].push(message);
-  saveLocalDB(db);
+  db.messages.get(threadId)!.push(message);
   
   return messageId;
 }
 
 export async function getMessageCount(threadId: string, role?: string): Promise<number> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     let query = client
@@ -597,15 +525,14 @@ export async function getMessageCount(threadId: string, role?: string): Promise<
       return count;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  const messages = db.messages[threadId] || [];
+  const db = getInMemoryDB();
+  const messages = db.messages.get(threadId) || [];
   
   if (role) {
-    return messages.filter((m: Message) => m.role === role).length;
+    return messages.filter(m => m.role === role).length;
   }
   
   return messages.length;
@@ -613,7 +540,6 @@ export async function getMessageCount(threadId: string, role?: string): Promise<
 
 // API Keys 操作
 export async function getApiKeys(userId: string): Promise<{ id: string; provider: string; key_name?: string; created_at: string }[]> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -626,20 +552,18 @@ export async function getApiKeys(userId: string): Promise<{ id: string; provider
       return data;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  return Object.values(db.api_keys)
-    .filter((k: any) => k.user_id === userId)
-    .map((k: any) => ({ id: k.id, provider: k.provider, key_name: k.key_name, created_at: k.created_at }));
+  const db = getInMemoryDB();
+  return Array.from(db.api_keys.values())
+    .filter(k => k.user_id === userId)
+    .map(k => ({ id: k.id, provider: k.provider, key_name: k.key_name, created_at: k.created_at }));
 }
 
 export async function createApiKey(userId: string, provider: string, keyName: string, keyValue: string): Promise<string> {
   const keyId = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { data, error } = await client
@@ -658,26 +582,23 @@ export async function createApiKey(userId: string, provider: string, keyName: st
       return data.id;
     }
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  db.api_keys[keyId] = {
+  const db = getInMemoryDB();
+  db.api_keys.set(keyId, {
     id: keyId,
     user_id: userId,
     provider,
     key_name: keyName,
     key_value: keyValue,
     created_at: new Date().toISOString()
-  };
-  saveLocalDB(db);
+  });
   
   return keyId;
 }
 
 export async function deleteApiKey(id: string, userId: string): Promise<boolean> {
-  // 尝试 Supabase
   try {
     const client = getSupabaseClient();
     const { error } = await client
@@ -688,21 +609,19 @@ export async function deleteApiKey(id: string, userId: string): Promise<boolean>
     
     if (!error) return true;
   } catch (e) {
-    // Fallback to local
+    // Fallback
   }
   
-  // Fallback to local storage
-  const db = getLocalDB();
-  if (db.api_keys[id] && db.api_keys[id].user_id === userId) {
-    delete db.api_keys[id];
-    saveLocalDB(db);
+  const db = getInMemoryDB();
+  const key = db.api_keys.get(id);
+  if (key && key.user_id === userId) {
+    db.api_keys.delete(id);
     return true;
   }
   
   return false;
 }
 
-// 默认导出（向后兼容）
 export default {
   supabase,
   getOrCreateUser,
