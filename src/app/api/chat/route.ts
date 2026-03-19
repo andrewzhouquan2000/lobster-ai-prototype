@@ -358,7 +358,12 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('Chat error:', error);
-    return NextResponse.json({ error: 'Failed to process message' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ 
+      error: 'Failed to process message', 
+      details: errorMessage,
+      stack: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.stack : undefined) : undefined
+    }, { status: 500 });
   }
 }
 
